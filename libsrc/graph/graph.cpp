@@ -1,5 +1,5 @@
-#include "graph/graph.h"
 #include "graph/vertex.h"
+#include "graph/graph.h"
 
 Graph::Graph()
 {
