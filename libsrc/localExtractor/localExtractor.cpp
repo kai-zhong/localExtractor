@@ -8,6 +8,11 @@ localExtractor::localExtractor()
 localExtractor::~localExtractor()
 {}
 
+void localExtractor::mclInit()
+{
+    mcl::aggs::AGGS::init();
+}
+
 VertexID localExtractor::getLiIndexTop()
 {
     std::map<uint, std::list<VertexID>>::const_reverse_iterator it = liIndex.rbegin();
@@ -17,52 +22,6 @@ VertexID localExtractor::getLiIndexTop()
         throw std::out_of_range("LiIndex is empty.");
     }
     return it->second.front();
-
-
-    // bool found = false;
-    // VertexID topVid;
-    // if(isLiIndexEmpty())
-    // {
-    //     std::cerr << "LiIndex is empty." << std::endl;
-    //     throw std::out_of_range("LiIndex is empty.");
-    // }
-    // for(std::map<uint, std::list<VertexID>>::reverse_iterator it = liIndex.rbegin(); it!= liIndex.rend();)
-    // {
-    //     uint li = it->first;
-    //     std::list<VertexID>& vidList = it->second;
-    //     // std::cout << "li: " << li << std::endl;
-    //     while(!vidList.empty())
-    //     {
-    //         // std::cout << "vidList.front(): " << vidList.front() << std::endl;
-    //         VertexID vid = vidList.front();
-    //         if(liIndexExists.find(vid) == liIndexExists.end() || liIndexExists.at(vid) != li)
-    //         {
-    //             vidList.pop_front();
-    //         }
-    //         else
-    //         {
-    //             found = true;
-    //             topVid = vid;
-    //             break;
-    //         }
-    //     }
-    //     if(found)
-    //     {
-    //         break;
-    //     }
-    //     else
-    //     {
-    //         if(vidList.empty())
-    //         {
-    //             it = std::map<uint, std::list<VertexID>>::reverse_iterator(liIndex.erase(std::next(it).base()));
-    //         }
-    //         else
-    //         {
-    //             it++;
-    //         }
-    //     }
-    // }
-    // return topVid;
 }
 
 void localExtractor::liIndexPop()
@@ -204,6 +163,19 @@ void localExtractor::globalExtract(const VertexID& queryV, const uint& k)
     }
 }
 
+void localExtractor::constructVO(const Graph& graph, const Graph& kcoreGraph)
+{
+    size_t n = kcoreGraph.getVertexNum();
+    vo.clear();
+    vo.reserve(n);
+    for(const std::pair<VertexID, Vertex>& nodePair : kcoreGraph.getNodes())
+    {
+        VertexID vid = nodePair.first;
+        Vertex v = graph.getVertex(vid);
+        vo.emplace_back(serializeVertexInfo(v));
+    }
+}
+
 Graph localExtractor::kcoreExtract(const Graph& graph, const VertexID& queryV, const uint& k)
 {
     if(!answerExists)
@@ -220,12 +192,137 @@ Graph localExtractor::kcoreExtract(const Graph& graph, const VertexID& queryV, c
         globalExtract(queryV, k);
     }
 
+    constructVO(graph, candGraph);
+
     return candGraph;
 }
 
 const Graph& localExtractor::getCandGraph() const
 {
     return candGraph;
+}
+
+std::string localExtractor::serializeVertexInfo(const Vertex& v)
+{
+    unsigned char splitter = '/';
+    std::ostringstream oss = std::ostringstream();
+
+    VertexID vid = v.getVid();
+    const std::vector<VertexID>& neighbors = v.getNeighbors();
+
+    std::string vidStr;
+
+    oss << vid;
+    for(const VertexID& neighbor : neighbors)
+    {
+        oss << splitter << neighbor;
+    }
+    
+    vidStr = oss.str();
+    return vidStr;
+}
+
+VertexID localExtractor::getSerializedVertexID(const std::string& serializedInfo)
+{
+    std::istringstream iss(serializedInfo);
+    std::string vidStr;
+    char splitter = '/';
+    std::getline(iss, vidStr, splitter); // 按 '/' 分隔，读取第一个部分
+    return static_cast<unsigned int>(std::stoul(vidStr));
+}
+
+void localExtractor::signGraph(const Graph& graph)
+{
+    mcl::aggs::AGGS::init();
+
+    const size_t n = graph.getVertexNum();
+    vertexSKeys.clear();
+    vertexPKeys.clear();
+    vertexSignatures.clear();
+    vertexSKeys.reserve(n);
+    vertexPKeys.reserve(n);
+    vertexSignatures.reserve(n);
+
+    for(const std::pair<VertexID, Vertex>& nodePair : graph.getNodes())
+    {
+        VertexID vid = nodePair.first;
+        mcl::aggs::SecretKey skey;
+        mcl::aggs::PublicKey pkey;
+        mcl::aggs::Signature sig;
+
+        skey.init();
+        skey.getPublicKey(pkey);
+        skey.sign(sig, serializeVertexInfo(nodePair.second));
+
+        vertexSKeys[vid] = skey;
+        vertexPKeys[vid] = pkey;
+        vertexSignatures[vid] = sig;
+    }
+}
+
+void localExtractor::updateVertexSignature(const Vertex& v)
+{
+    VertexID vid = v.getVid();
+    if(vertexSignatures.find(vid) == vertexSignatures.end())
+    {
+        mcl::aggs::SecretKey skey;
+        mcl::aggs::PublicKey pkey;
+        mcl::aggs::Signature sig;
+
+        skey.init();
+        skey.getPublicKey(pkey);
+        skey.sign(sig, serializeVertexInfo(v));
+
+        vertexSKeys[vid] = skey;
+        vertexPKeys[vid] = pkey;
+        vertexSignatures[vid] = sig;
+    }
+    else
+    {
+        mcl::aggs::Signature sig;
+        vertexSKeys[vid].sign(sig, serializeVertexInfo(v));
+        vertexSignatures[vid] = sig;
+    }
+}
+
+void localExtractor::verifyKcoreGraph(const std::vector<std::string>& VO)
+{
+    size_t n = VO.size();
+    std::vector<mcl::aggs::Signature> voSigs(n);
+    std::vector<mcl::aggs::PublicKey> voPKeys(n);
+    mcl::aggs::Signature aggSig;
+
+    for(size_t i = 0; i < n; i++)
+    {
+        VertexID vid = getSerializedVertexID(VO[i]);
+        voSigs[i] = vertexSignatures[vid];
+        voPKeys[i] = vertexPKeys[vid];
+    }
+    aggSig.aggregate(voSigs);
+
+    bool ok = aggSig.verify(VO, voPKeys);
+    std::cout << "Verification result: " << (ok ? "OK" : "NG") << std::endl;
+}
+
+const std::vector<std::string>& localExtractor::getVO() const
+{
+    return vo;
+}
+
+void localExtractor::calculateVOSize() const
+{
+    size_t totalSize = sizeof(vo); // vector 本身的大小
+    for (const auto& str : vo) 
+    {
+        totalSize += sizeof(str);       // 每个 std::string 对象的固定大小
+        totalSize += str.capacity();   // 加上字符串实际分配的容量
+    }
+
+    // 输出结果
+    std::cout << "Size of VO:" << std::endl;
+    std::cout << "  Bytes: " << totalSize << " bytes" << std::endl;
+    std::cout << "  Kilobytes: " << totalSize / 1024.0 << " KB" << std::endl;
+    std::cout << "  Megabytes: " << totalSize / (1024.0 * 1024.0) << " MB" << std::endl;
 }
 
 void localExtractor::printLiIndex() const
