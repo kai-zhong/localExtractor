@@ -65,6 +65,14 @@ class localExtractor
 
         void signGraph(const Graph& graph);
 
+        void signVertex(const Vertex& v);
+
+        void signAddUpdate(const Vertex& src, const Vertex& dst);
+
+        void signDeleteEdgeUpdate(const Vertex& v); // 节点未被删除，但是节点信息发生改变，需要更新节点的签名
+
+        void signDeleteVertexUpdate(const VertexID& vid); // 节点被删除，需要删除节点的签名
+
         void updateVertexSignature(const Vertex& v);
 
         void verifyKcoreGraph(const std::vector<std::string>& VO);

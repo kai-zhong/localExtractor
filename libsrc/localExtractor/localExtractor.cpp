@@ -260,6 +260,39 @@ void localExtractor::signGraph(const Graph& graph)
     }
 }
 
+void localExtractor::signVertex(const Vertex& v)
+{
+    VertexID vid = v.getVid();
+    mcl::aggs::SecretKey skey;
+    mcl::aggs::PublicKey pkey;
+    mcl::aggs::Signature sig;
+    skey.init();
+    skey.getPublicKey(pkey);
+    skey.sign(sig, serializeVertexInfo(v));
+
+    vertexSKeys[vid] = skey;
+    vertexPKeys[vid] = pkey;
+    vertexSignatures[vid] = sig;
+}
+
+void localExtractor::signAddUpdate(const Vertex& src, const Vertex& dst)
+{
+    signVertex(src);
+    signVertex(dst);
+}
+
+void localExtractor::signDeleteEdgeUpdate(const Vertex& v)
+{
+    signVertex(v);
+}
+
+void localExtractor::signDeleteVertexUpdate(const VertexID& vid)
+{
+    vertexSKeys.erase(vid);
+    vertexPKeys.erase(vid);
+    vertexSignatures.erase(vid);
+}
+
 void localExtractor::updateVertexSignature(const Vertex& v)
 {
     VertexID vid = v.getVid();

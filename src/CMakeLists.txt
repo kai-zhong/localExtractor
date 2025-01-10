@@ -6,6 +6,7 @@ target_link_libraries(main
 ${LIBRARY_OUTPUT_PATH}/libutil.a
 ${LIBRARY_OUTPUT_PATH}/libgraph.a
 ${LIBRARY_OUTPUT_PATH}/liblocalExtractor.a
+${LIBRARY_OUTPUT_PATH}/libutil.a
 ${OPENSSL_LIBRARIES}
 mcl
 )
