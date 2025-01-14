@@ -8,8 +8,6 @@
 #include <list>
 #include <string>
 
-#include <mcl/aggregate_sig.hpp>
-
 #include "../graph/graph.h"
 #include "../graph/vertex.h"
 #include "../util/common.h"
@@ -28,16 +26,12 @@ class localExtractor
         std::unordered_map<VertexID, uint> liIndexExists;
         bool answerExists;
 
-        std::unordered_map<VertexID, mcl::aggs::SecretKey> vertexSKeys;
-        std::unordered_map<VertexID, mcl::aggs::PublicKey> vertexPKeys;
-        std::unordered_map<VertexID, mcl::aggs::Signature> vertexSignatures;
+        std::pair<std::array<unsigned char, SHA256_DIGEST_LENGTH>, std::vector<std::string>> xorVO;
 
-        std::vector<std::string> vo;
+        std::array<unsigned char, SHA256_DIGEST_LENGTH> graphDigest;
     public:
         localExtractor();
         ~localExtractor();
-
-        void mclInit();
 
         VertexID getLiIndexTop();
 
@@ -53,7 +47,7 @@ class localExtractor
 
         void globalExtract(const VertexID& queryV, const uint& k);
 
-        void constructVO(const Graph& graph, const Graph& kcoreGraph);
+        void constructXORVO(const Graph& graph, const Graph& kcoreGraph);
 
         Graph kcoreExtract(const Graph& graph, const VertexID& queryV, const uint& k);
 
@@ -63,23 +57,15 @@ class localExtractor
 
         VertexID getSerializedVertexID(const std::string& serializedInfo);
 
-        void signGraph(const Graph& graph);
+        void generateGraphDigest(const Graph& graph);
 
-        void signVertex(const Vertex& v);
+        void updateGraphDigest(const unsigned char* oldVDigest, const unsigned char* newVDigest);
 
-        void signAddUpdate(const Vertex& src, const Vertex& dst);
+        void verifyKcoreGraphXOR(const std::pair<std::array<unsigned char, SHA256_DIGEST_LENGTH>, std::vector<std::string>>& VO);
 
-        void signDeleteEdgeUpdate(const Vertex& v); // 节点未被删除，但是节点信息发生改变，需要更新节点的签名
+        const std::pair<std::array<unsigned char, SHA256_DIGEST_LENGTH>, std::vector<std::string>>& getXORVO() const;
 
-        void signDeleteVertexUpdate(const VertexID& vid); // 节点被删除，需要删除节点的签名
-
-        void updateVertexSignature(const Vertex& v);
-
-        void verifyKcoreGraph(const std::vector<std::string>& VO);
-
-        const std::vector<std::string>& getVO() const;
-
-        void calculateVOSize() const;
+        void calculateXORVOSize() const;
 
         void printLiIndex() const;
 };

@@ -11,7 +11,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS} -std=c++11 -O3 -g -m
 find_package(OpenSSL REQUIRED)
 include_directories(
     ${OPENSSL_INCLUDE_DIR}
-    /usr/local/include/mcl/
     )
 
 # 这行指定了包含头文件的目录。${PROJECT_SOURCE_DIR}/include 是项目中的 include 目录，里面可能包含公共头文件，供编译器在编译时搜索这些文件。

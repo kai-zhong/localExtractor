@@ -8,11 +8,6 @@ localExtractor::localExtractor()
 localExtractor::~localExtractor()
 {}
 
-void localExtractor::mclInit()
-{
-    mcl::aggs::AGGS::init();
-}
-
 VertexID localExtractor::getLiIndexTop()
 {
     std::map<uint, std::list<VertexID>>::const_reverse_iterator it = liIndex.rbegin();
@@ -110,12 +105,12 @@ void localExtractor::candidateGeneration(const Graph& graph, const VertexID& que
         visited[currentV] = true;
         liIndexPop();
 
-        candGraph.addVertex(currentV, true, false);
+        candGraph.addVertex(currentV, true, true);
         for(const VertexID& neighbor : graph.getVertexNeighbors(currentV))
         {
             if(visited[neighbor] == true)
             {
-                candGraph.addEdge(currentV, neighbor, true, false);
+                candGraph.addEdge(currentV, neighbor, true, true);
             }
         }
         candVertices.emplace_back(currentV);
@@ -149,7 +144,7 @@ void localExtractor::globalExtract(const VertexID& queryV, const uint& k)
             {
                 break;
             }
-            candGraph.removeVertex(minDegreeV, true, false);
+            candGraph.removeVertex(minDegreeV, true, true);
         }
         else
         {
@@ -163,17 +158,25 @@ void localExtractor::globalExtract(const VertexID& queryV, const uint& k)
     }
 }
 
-void localExtractor::constructVO(const Graph& graph, const Graph& kcoreGraph)
+void localExtractor::constructXORVO(const Graph& graph, const Graph& kcoreGraph)
 {
     size_t n = kcoreGraph.getVertexNum();
-    vo.clear();
-    vo.reserve(n);
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> gd;
+    std::vector<std::string> originGraphVertexInfo;
+    gd = graphDigest;
     for(const std::pair<VertexID, Vertex>& nodePair : kcoreGraph.getNodes())
     {
         VertexID vid = nodePair.first;
         Vertex v = graph.getVertex(vid);
-        vo.emplace_back(serializeVertexInfo(v));
+        std::string vertexInfo = serializeVertexInfo(v);
+        std::array<unsigned char, SHA256_DIGEST_LENGTH> vertexDigestArr = v.getDigest();
+        for(size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+        {
+            gd[i] ^= v.getDigest()[i];
+        }
+        originGraphVertexInfo.emplace_back(vertexInfo);
     }
+    xorVO = std::make_pair(gd, originGraphVertexInfo);
 }
 
 Graph localExtractor::kcoreExtract(const Graph& graph, const VertexID& queryV, const uint& k)
@@ -188,12 +191,11 @@ Graph localExtractor::kcoreExtract(const Graph& graph, const VertexID& queryV, c
     if(!answerExists)
     {
         std::cout << "Start global extraction." << std::endl;
-        candGraph.buildInvertedIndex();
+        // candGraph.buildInvertedIndex();
         globalExtract(queryV, k);
     }
 
-    constructVO(graph, candGraph);
-
+    constructXORVO(graph, candGraph);
     return candGraph;
 }
 
@@ -231,128 +233,87 @@ VertexID localExtractor::getSerializedVertexID(const std::string& serializedInfo
     return static_cast<unsigned int>(std::stoul(vidStr));
 }
 
-void localExtractor::signGraph(const Graph& graph)
+void localExtractor::generateGraphDigest(const Graph& graph)
 {
-    mcl::aggs::AGGS::init();
-
-    const size_t n = graph.getVertexNum();
-    vertexSKeys.clear();
-    vertexPKeys.clear();
-    vertexSignatures.clear();
-    vertexSKeys.reserve(n);
-    vertexPKeys.reserve(n);
-    vertexSignatures.reserve(n);
-
+    bool start = true;
     for(const std::pair<VertexID, Vertex>& nodePair : graph.getNodes())
     {
-        VertexID vid = nodePair.first;
-        mcl::aggs::SecretKey skey;
-        mcl::aggs::PublicKey pkey;
-        mcl::aggs::Signature sig;
-
-        skey.init();
-        skey.getPublicKey(pkey);
-        skey.sign(sig, serializeVertexInfo(nodePair.second));
-
-        vertexSKeys[vid] = skey;
-        vertexPKeys[vid] = pkey;
-        vertexSignatures[vid] = sig;
+        if(start == true)
+        {
+            start = false;
+            graphDigest = nodePair.second.getDigest();
+            continue;
+        }
+        Vertex v = nodePair.second;
+        std::array<unsigned char, SHA256_DIGEST_LENGTH> vertexDigestArr = v.getDigest();
+        for(size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+        {
+            graphDigest[i] ^= vertexDigestArr[i];
+        }
     }
 }
 
-void localExtractor::signVertex(const Vertex& v)
+void localExtractor::updateGraphDigest(const unsigned char* oldVDigest, const unsigned char* newVDigest)
 {
-    VertexID vid = v.getVid();
-    mcl::aggs::SecretKey skey;
-    mcl::aggs::PublicKey pkey;
-    mcl::aggs::Signature sig;
-    skey.init();
-    skey.getPublicKey(pkey);
-    skey.sign(sig, serializeVertexInfo(v));
-
-    vertexSKeys[vid] = skey;
-    vertexPKeys[vid] = pkey;
-    vertexSignatures[vid] = sig;
-}
-
-void localExtractor::signAddUpdate(const Vertex& src, const Vertex& dst)
-{
-    signVertex(src);
-    signVertex(dst);
-}
-
-void localExtractor::signDeleteEdgeUpdate(const Vertex& v)
-{
-    signVertex(v);
-}
-
-void localExtractor::signDeleteVertexUpdate(const VertexID& vid)
-{
-    vertexSKeys.erase(vid);
-    vertexPKeys.erase(vid);
-    vertexSignatures.erase(vid);
-}
-
-void localExtractor::updateVertexSignature(const Vertex& v)
-{
-    VertexID vid = v.getVid();
-    if(vertexSignatures.find(vid) == vertexSignatures.end())
+    if(oldVDigest == nullptr) // 新增顶点
     {
-        mcl::aggs::SecretKey skey;
-        mcl::aggs::PublicKey pkey;
-        mcl::aggs::Signature sig;
-
-        skey.init();
-        skey.getPublicKey(pkey);
-        skey.sign(sig, serializeVertexInfo(v));
-
-        vertexSKeys[vid] = skey;
-        vertexPKeys[vid] = pkey;
-        vertexSignatures[vid] = sig;
+        for(size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+        {
+            graphDigest[i] ^= newVDigest[i];
+        }
+        return ;
     }
-    else
+    if(newVDigest == nullptr) // 删除顶点
     {
-        mcl::aggs::Signature sig;
-        vertexSKeys[vid].sign(sig, serializeVertexInfo(v));
-        vertexSignatures[vid] = sig;
+        for(size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+        {
+            graphDigest[i] ^= oldVDigest[i];
+        }
+        return ;
+    }
+    for(size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+    {
+        graphDigest[i] ^= oldVDigest[i] ^ newVDigest[i];
     }
 }
 
-void localExtractor::verifyKcoreGraph(const std::vector<std::string>& VO)
+void localExtractor::verifyKcoreGraphXOR(const std::pair<std::array<unsigned char, SHA256_DIGEST_LENGTH>, std::vector<std::string>>& VO)
 {
-    size_t n = VO.size();
-    std::vector<mcl::aggs::Signature> voSigs(n);
-    std::vector<mcl::aggs::PublicKey> voPKeys(n);
-    mcl::aggs::Signature aggSig;
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> gd = xorVO.first;
 
-    for(size_t i = 0; i < n; i++)
+    for(const std::string& str : VO.second)
     {
-        VertexID vid = getSerializedVertexID(VO[i]);
-        voSigs[i] = vertexSignatures[vid];
-        voPKeys[i] = vertexPKeys[vid];
+        unsigned char vertexDigest[SHA256_DIGEST_LENGTH];
+        SHA256_CTX ctx;
+        SHA256_Init(&ctx);
+        SHA256_Update(&ctx, (unsigned char*)str.c_str(), str.size());
+        SHA256_Final(vertexDigest, &ctx);
+        for(size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i)
+        {
+            gd[i] ^= vertexDigest[i];
+        }
     }
-    aggSig.aggregate(voSigs);
 
-    bool ok = aggSig.verify(VO, voPKeys);
+    bool ok = gd == graphDigest;
     std::cout << "Verification result: " << (ok ? "OK" : "NG") << std::endl;
 }
 
-const std::vector<std::string>& localExtractor::getVO() const
+const std::pair<std::array<unsigned char, SHA256_DIGEST_LENGTH>, std::vector<std::string>>& localExtractor::getXORVO() const
 {
-    return vo;
+    return xorVO;
 }
 
-void localExtractor::calculateVOSize() const
+void localExtractor::calculateXORVOSize() const
 {
-    size_t totalSize = sizeof(vo); // vector 本身的大小
-    for (const auto& str : vo) 
+    size_t totalSize = sizeof(std::array<unsigned char, SHA256_DIGEST_LENGTH>) + SHA256_DIGEST_LENGTH;
+    totalSize += sizeof(std::vector<std::string>);
+    for(const auto& str : xorVO.second)
     {
-        totalSize += sizeof(str);       // 每个 std::string 对象的固定大小
-        totalSize += str.capacity();   // 加上字符串实际分配的容量
+        totalSize += sizeof(str);
+        totalSize += str.capacity();
     }
 
-    // 输出结果
-    std::cout << "Size of VO:" << std::endl;
+    std::cout << "Size of XORVO:" << std::endl;
     std::cout << "  Bytes: " << totalSize << " bytes" << std::endl;
     std::cout << "  Kilobytes: " << totalSize / 1024.0 << " KB" << std::endl;
     std::cout << "  Megabytes: " << totalSize / (1024.0 * 1024.0) << " MB" << std::endl;

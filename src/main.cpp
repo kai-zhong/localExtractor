@@ -6,8 +6,8 @@
 #include "./util/edgeReader.h"
 #include "./localExtractor/localExtractor.h"
 
-const int addBatchNum = 1000;
-const int delBatchNum = 500;
+const int addBatchNum = 10000;
+const int delBatchNum = 5000;
 
 int main(int argc, char* argv[])
 {
@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
     
     // 图节点签名
     auto start = std::chrono::high_resolution_clock::now();
-    extractor.signGraph(graph);
+    extractor.generateGraphDigest(graph);
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     std::cout << "Time taken for signature computation: " << duration.count() << " ms" << std::endl << std::endl;
@@ -38,8 +38,21 @@ int main(int argc, char* argv[])
         {
             VertexID srcVid = edge.first;
             VertexID dstVid = edge.second;
+            bool srcExists = graph.hasVertex(srcVid);
+            bool dstExists = graph.hasVertex(dstVid);
+            unsigned char srcOldDigest[SHA256_DIGEST_LENGTH];
+            unsigned char dstOldDigest[SHA256_DIGEST_LENGTH];
+            if(srcExists)
+            {
+                memcpy(srcOldDigest, graph.getVertexDigest(srcVid).data(), SHA256_DIGEST_LENGTH);
+            }
+            if(dstExists)
+            {
+                memcpy(dstOldDigest, graph.getVertexDigest(dstVid).data(), SHA256_DIGEST_LENGTH);
+            }
             graph.addEdge(srcVid, dstVid, true, true);
-            extractor.signAddUpdate(graph.getVertex(srcVid), graph.getVertex(dstVid));
+            extractor.updateGraphDigest(srcExists? srcOldDigest : nullptr, graph.getVertexDigest(srcVid).data());
+            extractor.updateGraphDigest(dstExists? dstOldDigest : nullptr, graph.getVertexDigest(dstVid).data());
         }
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -51,25 +64,15 @@ int main(int argc, char* argv[])
         {
             VertexID srcVid = edge.first;
             VertexID dstVid = edge.second;
+            unsigned char srcOldDigest[SHA256_DIGEST_LENGTH];
+            unsigned char dstOldDigest[SHA256_DIGEST_LENGTH];
+            memcpy(srcOldDigest, graph.getVertexDigest(srcVid).data(), SHA256_DIGEST_LENGTH);
+            memcpy(dstOldDigest, graph.getVertexDigest(dstVid).data(), SHA256_DIGEST_LENGTH);
             graph.removeEdge(srcVid, dstVid, true, true);
             bool srcExists = graph.hasVertex(srcVid);
             bool dstExists = graph.hasVertex(dstVid);
-            if(!srcExists)
-            {
-                extractor.signDeleteVertexUpdate(srcVid);
-            }
-            else
-            {
-                extractor.signDeleteEdgeUpdate(graph.getVertex(srcVid));
-            }
-            if(!dstExists)
-            {
-                extractor.signDeleteVertexUpdate(dstVid);
-            }
-            else
-            {
-                extractor.signDeleteEdgeUpdate(graph.getVertex(dstVid));
-            }
+            extractor.updateGraphDigest(srcOldDigest, srcExists? graph.getVertexDigest(srcVid).data() : nullptr);
+            extractor.updateGraphDigest(dstOldDigest, dstExists? graph.getVertexDigest(dstVid).data() : nullptr);
         }
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -85,15 +88,14 @@ int main(int argc, char* argv[])
         std::cout << std::endl;
 
         // VO验证
-        extractor.mclInit();
         start = std::chrono::high_resolution_clock::now();
-        extractor.verifyKcoreGraph(extractor.getVO());
+        extractor.verifyKcoreGraphXOR(extractor.getXORVO());
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         std::cout << "Time taken for verification: " << duration.count() << " ms" << std::endl << std::endl;
 
         // VO大小计算
-        extractor.calculateVOSize();
+        extractor.calculateXORVOSize();
         std::cout << std::endl;
     }
 
